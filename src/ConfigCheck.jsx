@@ -1,10 +1,14 @@
 export const ConfigCheck = () => {
-  const missing = [];
+  const requiredKeys = [
+    "VITE_FIREBASE_API_KEY",
+    "VITE_FIREBASE_AUTH_DOMAIN",
+    "VITE_FIREBASE_PROJECT_ID",
+    "VITE_FIREBASE_STORAGE_BUCKET",
+    "VITE_FIREBASE_MESSAGING_SENDER_ID",
+    "VITE_FIREBASE_APP_ID",
+  ];
 
-  if (!import.meta.env.VITE_FIREBASE_API_KEY) missing.push("API Key");
-  if (!import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) missing.push("Auth Domain");
-  if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) missing.push("Project ID");
-  if (!import.meta.env.VITE_FIREBASE_APP_ID) missing.push("App ID");
+  const missing = requiredKeys.filter((key) => !import.meta.env[key]);
 
   if (missing.length === 0) return null;
 
@@ -75,7 +79,7 @@ export const ConfigCheck = () => {
         >
           {missing.map((field) => (
             <li key={field} style={{ margin: "0.5rem 0" }}>
-              ✗ VITE_FIREBASE_{field.toUpperCase().replace(/ /g, "_")}
+              ✗ {field}
             </li>
           ))}
         </ul>

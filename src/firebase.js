@@ -3,16 +3,23 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBrip-Ck_ZhqdtW_wE7hWNR3iJjc2sfvak",
-  authDomain: "personal-expense-manager-89ea7.firebaseapp.com",
-  projectId: "personal-expense-manager-89ea7",
-  storageBucket: "personal-expense-manager-89ea7.firebasestorage.app",
-  messagingSenderId: "837793254173",
-  appId: "1:837793254173:web:dee2315a6e9e6256c7eff4"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const firebaseConfigReady = Object.values(firebaseConfig).every(Boolean);
+export const firebaseConfigReady = [
+  firebaseConfig.apiKey,
+  firebaseConfig.authDomain,
+  firebaseConfig.projectId,
+  firebaseConfig.storageBucket,
+  firebaseConfig.messagingSenderId,
+  firebaseConfig.appId,
+].every(Boolean);
