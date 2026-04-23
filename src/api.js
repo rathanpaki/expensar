@@ -22,9 +22,7 @@ import { auth, db, firebaseConfigReady } from "./firebase";
 
 const requireFirebase = () => {
   if (!firebaseConfigReady) {
-    throw new Error(
-      "Firebase is not configured. Add the VITE_FIREBASE_* variables to your .env file.",
-    );
+    throw new Error("Firebase not configured.");
   }
 };
 
@@ -61,6 +59,10 @@ const sortByDateDesc = (items) =>
 export const userAPI = {
   register: async (name, email, password) => {
     requireFirebase();
+    if (!name?.trim() || !email?.trim() || !password?.trim()) {
+      throw new Error("All fields required.");
+    }
+
     const credential = await createUserWithEmailAndPassword(
       auth,
       email,
@@ -84,6 +86,10 @@ export const userAPI = {
 
   login: async (email, password) => {
     requireFirebase();
+    if (!email?.trim() || !password?.trim()) {
+      throw new Error("Email and password required.");
+    }
+
     const credential = await signInWithEmailAndPassword(auth, email, password);
     const snapshot = await getDoc(userDocRef(credential.user.uid));
 
@@ -102,6 +108,7 @@ export const userAPI = {
 
   getUser: async (userId) => {
     requireFirebase();
+    if (!userId) throw new Error("User ID required.");
     const snapshot = await getDoc(userDocRef(userId));
     return { data: snapshot.exists() ? snapshot.data() : null };
   },
@@ -147,6 +154,10 @@ export const userAPI = {
 export const expenseAPI = {
   addExpense: async (userId, expenseData) => {
     requireFirebase();
+    if (!userId || !expenseData?.description || !expenseData?.amount) {
+      throw new Error("Missing required fields.");
+    }
+
     const payload = {
       ...expenseData,
       amount: Number(expenseData.amount) || 0,
@@ -238,6 +249,10 @@ export const expenseAPI = {
 export const budgetAPI = {
   setBudget: async (userId, budgetData) => {
     requireFirebase();
+    if (!userId || !budgetData?.category || !budgetData?.amount) {
+      throw new Error("Missing required fields.");
+    }
+
     const payload = {
       category: budgetData.category,
       amount: Number(budgetData.amount) || 0,

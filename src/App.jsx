@@ -37,9 +37,14 @@ import {
 } from "recharts";
 import { userAPI, expenseAPI, budgetAPI } from "./api";
 import { firebaseConfigReady } from "./firebase";
+import { ConfigCheck } from "./ConfigCheck";
+import { getAuthErrorMessage } from "./errorHandler";
 import "./App.css";
 
 const ExpenseTracker = () => {
+  if (!firebaseConfigReady) {
+    return <ConfigCheck />;
+  }
   // Auth State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authMode, setAuthMode] = useState("login"); // login or register
@@ -66,6 +71,8 @@ const ExpenseTracker = () => {
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetCategory, setBudgetCategory] = useState("food");
   const [budgetAmount, setBudgetAmount] = useState("");
+  const [isEditingBudget, setIsEditingBudget] = useState(false);
+  const [selectedBudgetPopup, setSelectedBudgetPopup] = useState(null);
 
   // UI State
   const [reportView, setReportView] = useState("weekly");
@@ -79,6 +86,8 @@ const ExpenseTracker = () => {
     () => localStorage.getItem("currencyCode") || "USD",
   );
   const [showCurrencyMenu, setShowCurrencyMenu] = useState(false);
+  const [isLoadingExpenses, setIsLoadingExpenses] = useState(false);
+  const [isLoadingBudgets, setIsLoadingBudgets] = useState(false);
   const currencyMenuRef = useRef(null);
   const exportMenuRef = useRef(null);
 
@@ -100,6 +109,7 @@ const ExpenseTracker = () => {
   const currencyOptions = [
     { code: "USD", label: "US Dollar", locale: "en-US", symbol: "$" },
     { code: "LKR", label: "Sri Lankan Rupee", locale: "si-LK", symbol: "Rs" },
+    { code: "QAR", label: "Qatar Riyal", locale: "en-QA", symbol: "ر.ق" },
     { code: "EUR", label: "Euro", locale: "de-DE", symbol: "€" },
     { code: "GBP", label: "British Pound", locale: "en-GB", symbol: "£" },
     { code: "INR", label: "Indian Rupee", locale: "en-IN", symbol: "₹" },
@@ -260,31 +270,19 @@ const ExpenseTracker = () => {
       }
       setAuthForm({ email: "", password: "", name: "" });
     } catch (err) {
-      const firebaseCode = err.code || err?.message || "";
-      const errMsg =
-        err.response?.data?.message ||
-        (firebaseCode === "auth/email-already-in-use"
-          ? "This email is already registered. Try signing in instead."
-          : firebaseCode === "auth/user-not-found"
-            ? "No account was found for that email. Please sign up first."
-            : firebaseCode === "auth/wrong-password" ||
-                firebaseCode === "auth/invalid-credential"
-              ? "Invalid email or password."
-              : err.message || "Authentication failed");
+      const msg = getAuthErrorMessage(err.code || "");
+      const code = err.code || "";
 
-      if (authMode === "login" && firebaseCode === "auth/user-not-found") {
+      if (code === "auth/user-not-found" && authMode === "login") {
         setAuthMode("register");
       }
 
-      if (
-        authMode === "register" &&
-        firebaseCode === "auth/email-already-in-use"
-      ) {
+      if (code === "auth/email-already-in-use" && authMode === "register") {
         setAuthMode("login");
       }
 
-      setError(errMsg);
-      addNotification(errMsg, "error");
+      setError(msg);
+      addNotification(msg, "error");
     } finally {
       setLoading(false);
     }
@@ -306,16 +304,21 @@ const ExpenseTracker = () => {
 
   // Load expenses from backend
   const loadExpenses = async (userId) => {
+    setIsLoadingExpenses(true);
     try {
       const response = await expenseAPI.getAllExpenses(userId);
       setExpenses(response.data || []);
     } catch (err) {
-      addNotification("Failed to load expenses", "error");
+      console.error(err);
+      setExpenses([]);
+    } finally {
+      setIsLoadingExpenses(false);
     }
   };
 
   // Load budgets from backend
   const loadBudgets = async (userId) => {
+    setIsLoadingBudgets(true);
     try {
       const response = await budgetAPI.getBudgetsWithSpending(userId);
       const budgetsMap = {};
@@ -324,7 +327,10 @@ const ExpenseTracker = () => {
       });
       setBudgets(budgetsMap);
     } catch (err) {
-      addNotification("Failed to load budgets", "error");
+      console.error(err);
+      setBudgets({});
+    } finally {
+      setIsLoadingBudgets(false);
     }
   };
 
@@ -348,10 +354,11 @@ const ExpenseTracker = () => {
       setDescription("");
       setAmount("");
       setDate(new Date().toISOString().split("T")[0]);
-      addNotification("Expense added successfully! 💰", "success");
+      addNotification("Expense added 💰", "success");
       checkBudgetAlert(category, parseFloat(amount));
     } catch (err) {
-      addNotification("Failed to add expense", "error");
+      console.error(err);
+      addNotification("Try again.", "error");
     } finally {
       setLoading(false);
     }
@@ -361,16 +368,17 @@ const ExpenseTracker = () => {
     try {
       await expenseAPI.deleteExpense(currentUser.id, id);
       loadExpenses(currentUser.id);
-      addNotification("Expense deleted", "info");
+      addNotification("Deleted", "info");
     } catch (err) {
-      addNotification("Failed to delete expense", "error");
+      console.error(err);
+      addNotification("Try again.", "error");
     }
   };
 
   const setBudget = async (e) => {
     e.preventDefault();
     if (!budgetAmount || parseFloat(budgetAmount) <= 0) {
-      addNotification("Please enter a valid budget amount", "error");
+      addNotification("Enter a valid amount.", "error");
       return;
     }
 
@@ -380,16 +388,51 @@ const ExpenseTracker = () => {
         category: budgetCategory,
         amount: parseFloat(budgetAmount),
       };
-      await budgetAPI.setBudget(currentUser.id, budgetData);
+
+      if (isEditingBudget) {
+        await budgetAPI.updateBudget(
+          currentUser.id,
+          budgetCategory,
+          budgetData,
+        );
+        addNotification("Budget updated 💸", "success");
+      } else {
+        await budgetAPI.setBudget(currentUser.id, budgetData);
+        addNotification("Budget set 🎯", "success");
+      }
+
       loadBudgets(currentUser.id);
       setBudgetAmount("");
+      setBudgetCategory("food");
       setShowBudgetModal(false);
-      addNotification("Budget set successfully! 🎯", "success");
+      setIsEditingBudget(false);
     } catch (err) {
-      addNotification("Failed to set budget", "error");
+      console.error(err);
+      addNotification("Try again.", "error");
     } finally {
       setLoading(false);
     }
+  };
+
+  const deleteBudget = async (category) => {
+    try {
+      setLoading(true);
+      await budgetAPI.deleteBudget(currentUser.id, category);
+      loadBudgets(currentUser.id);
+      addNotification("Budget deleted", "info");
+    } catch (err) {
+      console.error(err);
+      addNotification("Try again.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openEditBudgetModal = (category, amount) => {
+    setBudgetCategory(category);
+    setBudgetAmount(amount.toString());
+    setIsEditingBudget(true);
+    setShowBudgetModal(true);
   };
 
   const checkBudgetAlert = (cat, newAmount) => {
@@ -518,6 +561,16 @@ const ExpenseTracker = () => {
 
   const formatCurrency = (value) => {
     const numericValue = Number(value) || 0;
+
+    if (activeCurrency.code === "QAR") {
+      const formattedNumber = new Intl.NumberFormat(activeCurrency.locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(numericValue);
+
+      return `${activeCurrency.symbol} ${formattedNumber}`;
+    }
+
     return new Intl.NumberFormat(activeCurrency.locale, {
       style: "currency",
       currency: activeCurrency.code,
@@ -1327,11 +1380,46 @@ const ExpenseTracker = () => {
           </div>
 
           {/* Budget Overview */}
-          {categoryData.length > 0 && (
+          {isLoadingBudgets ? (
+            <div className="card animation-delay-2">
+              <h2 className="card-title">Budget vs Spending</h2>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  padding: "2rem",
+                }}
+              >
+                <div className="spinner"></div>
+              </div>
+            </div>
+          ) : categoryData.length > 0 ? (
             <div className="card animation-delay-2">
               <h2 className="card-title">Budget vs Spending</h2>
               {categoryData.map((cat, index) => (
-                <div key={cat.id} className="budget-item">
+                <div
+                  key={cat.id}
+                  className="budget-item"
+                  onClick={() =>
+                    cat.budget > 0 && setSelectedBudgetPopup(cat.id)
+                  }
+                  style={{
+                    cursor: cat.budget > 0 ? "pointer" : "default",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (cat.budget > 0) {
+                      e.currentTarget.style.background = darkMode
+                        ? "rgba(102, 126, 234, 0.1)"
+                        : "rgba(102, 126, 234, 0.05)";
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.transform = "translateY(0)";
+                  }}
+                >
                   <div className="budget-header">
                     <span className="budget-name">
                       {cat.icon} {cat.label}
@@ -1368,6 +1456,154 @@ const ExpenseTracker = () => {
                   )}
                 </div>
               ))}
+            </div>
+          ) : null}
+
+          {/* Budget Actions Popup */}
+          {selectedBudgetPopup && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: "rgba(0, 0, 0, 0.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+                padding: "1rem",
+                overflow: "auto",
+              }}
+              onClick={() => setSelectedBudgetPopup(null)}
+            >
+              <div
+                style={{
+                  background: darkMode ? "#1a1a2e" : "white",
+                  padding: "1.5rem",
+                  borderRadius: "12px",
+                  boxShadow: darkMode
+                    ? "0 10px 40px rgba(0, 0, 0, 0.5)"
+                    : "0 10px 40px rgba(0, 0, 0, 0.1)",
+                  textAlign: "center",
+                  width: "100%",
+                  maxWidth: "400px",
+                  minWidth: "280px",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3
+                  style={{
+                    marginBottom: "1.5rem",
+                    color: darkMode ? "white" : "#1a1a2e",
+                    fontSize: "1.1rem",
+                    fontWeight: "600",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {categories.find((c) => c.id === selectedBudgetPopup)?.label}{" "}
+                  Budget
+                </h3>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "0.75rem",
+                    flexDirection: "column",
+                  }}
+                >
+                  <button
+                    onClick={() => {
+                      const budgetAmount = budgets[selectedBudgetPopup];
+                      openEditBudgetModal(selectedBudgetPopup, budgetAmount);
+                      setSelectedBudgetPopup(null);
+                    }}
+                    style={{
+                      padding: "0.9rem 1.5rem",
+                      background: "#667eea",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "0.95rem",
+                      fontWeight: "600",
+                      fontFamily: '"Work Sans", sans-serif',
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                      width: "100%",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#764ba2";
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "#667eea";
+                      e.currentTarget.style.transform = "translateY(0)";
+                    }}
+                  >
+                    ✏️ Edit Budget
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      deleteBudget(selectedBudgetPopup);
+                      setSelectedBudgetPopup(null);
+                    }}
+                    style={{
+                      padding: "0.9rem 1.5rem",
+                      background: "#ef4444",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "0.95rem",
+                      fontWeight: "600",
+                      fontFamily: '"Work Sans", sans-serif',
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                      width: "100%",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#dc2626";
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "#ef4444";
+                      e.currentTarget.style.transform = "translateY(0)";
+                    }}
+                  >
+                    🗑️ Delete Budget
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedBudgetPopup(null)}
+                    style={{
+                      padding: "0.9rem 1.5rem",
+                      background: darkMode ? "#333" : "#f0f0f0",
+                      color: darkMode ? "#ccc" : "#333",
+                      border: "none",
+                      borderRadius: "8px",
+                      fontSize: "0.95rem",
+                      fontWeight: "600",
+                      fontFamily: '"Work Sans", sans-serif',
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                      width: "100%",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = darkMode
+                        ? "#444"
+                        : "#e0e0e0";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = darkMode
+                        ? "#333"
+                        : "#f0f0f0";
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -1509,7 +1745,17 @@ const ExpenseTracker = () => {
             </div>
           </div>
 
-          {filteredExpenses.length === 0 ? (
+          {isLoadingExpenses ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                padding: "2rem",
+              }}
+            >
+              <div className="spinner"></div>
+            </div>
+          ) : filteredExpenses.length === 0 ? (
             <div className="empty-state expense-list-scroll">
               <TrendingUp
                 size={48}
@@ -1596,21 +1842,31 @@ const ExpenseTracker = () => {
         <div
           className="modal-overlay"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setShowBudgetModal(false);
+            if (e.target === e.currentTarget) {
+              setShowBudgetModal(false);
+              setIsEditingBudget(false);
+            }
           }}
         >
           <div
             className="modal-content"
             style={{ background: darkMode ? "#2a2a3e" : "white" }}
           >
-            <h2 className="card-title">Set Category Budget</h2>
+            <h2 className="card-title">
+              {isEditingBudget ? "Edit Budget" : "Set Category Budget"}
+            </h2>
             <form onSubmit={setBudget}>
               <div className="form-group">
                 <label className="form-label">Category</label>
                 <select
                   value={budgetCategory}
                   onChange={(e) => setBudgetCategory(e.target.value)}
+                  disabled={isEditingBudget}
                   className="form-input select-input"
+                  style={{
+                    opacity: isEditingBudget ? 0.6 : 1,
+                    cursor: isEditingBudget ? "not-allowed" : "pointer",
+                  }}
                 >
                   {categories.map((cat) => (
                     <option key={cat.id} value={cat.id}>
@@ -1636,7 +1892,12 @@ const ExpenseTracker = () => {
               <div style={{ display: "flex", gap: "0.75rem" }}>
                 <button
                   type="button"
-                  onClick={() => setShowBudgetModal(false)}
+                  onClick={() => {
+                    setShowBudgetModal(false);
+                    setIsEditingBudget(false);
+                    setBudgetAmount("");
+                    setBudgetCategory("food");
+                  }}
                   style={{
                     flex: 1,
                     padding: "0.875rem",
@@ -1670,7 +1931,13 @@ const ExpenseTracker = () => {
                     opacity: loading ? 0.7 : 1,
                   }}
                 >
-                  {loading ? "Setting..." : "Set Budget"}
+                  {loading
+                    ? isEditingBudget
+                      ? "Updating..."
+                      : "Setting..."
+                    : isEditingBudget
+                      ? "Update Budget"
+                      : "Set Budget"}
                 </button>
               </div>
             </form>

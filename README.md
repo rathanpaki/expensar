@@ -19,16 +19,48 @@ If you are developing a production application, we recommend using TypeScript wi
 
 ## Firebase backend
 
-This app now uses Firebase Auth and Firestore instead of a local REST API.
+This app uses Firebase Auth and Firestore as the full backend (no separate server needed).
 
-1. Create a Firebase project in the Firebase console.
-2. Enable Email/Password authentication.
-3. Create a Firestore database.
-4. Copy `.env.example` to `.env` and fill in your Firebase web app values.
-5. Restart the Vite dev server after updating the environment file.
+### Setup
 
-Data is stored in these Firestore paths:
+1. Create a project at [firebase.google.com](https://firebase.google.com)
+2. Go to Authentication → Email/Password and enable it
+3. Create a Firestore database in production mode
+4. In Project Settings, copy your web app config values
+5. Copy `.env.example` to `.env.local` and fill in the values
+6. Restart the dev server: `npm run dev`
 
-- `users/{uid}` for user profiles
-- `users/{uid}/expenses` for expense records
-- `users/{uid}/budgets` for category budgets
+### Data Structure
+
+```
+users/{uid}
+  └─ expenses/{docId}
+  └─ budgets/{category}
+```
+
+All reads and writes are scoped to authenticated users only by Firestore rules.
+
+### Security
+
+- **Firestore Rules**: Only users can read/write their own data (`firestore.rules`)
+- **Auth**: Uses Firebase Email/Password with no client secret exposure
+- **Validation**: All inputs validated before database operations
+- **Storage**: User data never stored in localStorage beyond the session
+- **Environment**: Firebase config is public-safe (API key is meant to be exposed in client apps)
+
+### Deploy
+
+Build the app:
+
+```bash
+npm run build
+```
+
+Deploy to Firebase Hosting:
+
+```bash
+npm install -g firebase-tools
+firebase login
+firebase init hosting  # Select your project
+firebase deploy
+```
