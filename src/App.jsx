@@ -39,6 +39,7 @@ import { userAPI, expenseAPI, budgetAPI } from "./api";
 import { firebaseConfigReady } from "./firebase";
 import { ConfigCheck } from "./ConfigCheck";
 import { getAuthErrorMessage } from "./errorHandler";
+import { AISuggestionsModal } from "./AISuggestionsModal";
 import "./App.css";
 
 const ExpenseTracker = () => {
@@ -60,6 +61,7 @@ const ExpenseTracker = () => {
 
   // Expense State
   const [expenses, setExpenses] = useState([]);
+  const [allExpenses, setAllExpenses] = useState([]);
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("food");
@@ -82,16 +84,35 @@ const ExpenseTracker = () => {
     localStorage.getItem("darkMode") === "true",
   );
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showAiSuggestionsModal, setShowAiSuggestionsModal] = useState(false);
+  const [showCustomDateModal, setShowCustomDateModal] = useState(false);
+  const [customDateRange, setCustomDateRange] = useState({
+    startDate: new Date().toISOString().split("T")[0],
+    endDate: new Date().toISOString().split("T")[0],
+  });
   const [currencyCode, setCurrencyCode] = useState(
     () => localStorage.getItem("currencyCode") || "USD",
   );
   const [showCurrencyMenu, setShowCurrencyMenu] = useState(false);
   const [isLoadingExpenses, setIsLoadingExpenses] = useState(false);
   const [isLoadingBudgets, setIsLoadingBudgets] = useState(false);
+  const [customCategories, setCustomCategories] = useState(() => {
+    const saved = localStorage.getItem("customCategories");
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showCreateCategoryModal, setShowCreateCategoryModal] = useState(false);
+  const [newCategory, setNewCategory] = useState({
+    label: "",
+    icon: "📦",
+    color: "#A8D8EA",
+  });
+  const [lastMonthReset, setLastMonthReset] = useState(() => {
+    return localStorage.getItem("lastMonthReset") || "";
+  });
   const currencyMenuRef = useRef(null);
   const exportMenuRef = useRef(null);
 
-  const categories = [
+  const defaultCategories = [
     { id: "food", label: "Food & Dining", color: "#FF6B6B", icon: "🍽️" },
     { id: "transport", label: "Transport", color: "#4ECDC4", icon: "🚗" },
     {
@@ -106,6 +127,16 @@ const ExpenseTracker = () => {
     { id: "other", label: "Other", color: "#A8D8EA", icon: "📦" },
   ];
 
+  const categories = [
+    ...defaultCategories,
+    ...customCategories.map((cat) => ({
+      id: `custom_${cat.id}`,
+      label: cat.label,
+      color: cat.color,
+      icon: cat.icon,
+    })),
+  ];
+
   const currencyOptions = [
     { code: "USD", label: "US Dollar", locale: "en-US", symbol: "$" },
     { code: "LKR", label: "Sri Lankan Rupee", locale: "si-LK", symbol: "Rs" },
@@ -116,6 +147,14 @@ const ExpenseTracker = () => {
     { code: "AUD", label: "Australian Dollar", locale: "en-AU", symbol: "A$" },
     { code: "JPY", label: "Japanese Yen", locale: "ja-JP", symbol: "¥" },
   ];
+
+  const getMonthKey = (dateValue) => {
+    const parsedDate = dateValue ? new Date(dateValue) : new Date();
+    return `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}`;
+  };
+
+  const isSameMonth = (dateValue, monthKey) =>
+    getMonthKey(dateValue) === monthKey;
 
   // Load user session
   useEffect(() => {
@@ -224,6 +263,51 @@ const ExpenseTracker = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Monthly reset check
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    // Initialize month on first login
+    if (!lastMonthReset) {
+      console.log("First login - initializing month tracker:", currentMonth);
+      localStorage.setItem("lastMonthReset", currentMonth);
+      setLastMonthReset(currentMonth);
+      loadExpenses(currentUser.id);
+      return;
+    }
+
+    // Check if month has changed
+    if (lastMonthReset !== currentMonth) {
+      console.log("Month changed from", lastMonthReset, "to", currentMonth);
+      const rotateMonthlyData = async () => {
+        try {
+          setLoading(true);
+          localStorage.setItem("lastMonthReset", currentMonth);
+          setLastMonthReset(currentMonth);
+          await loadExpenses(currentUser.id);
+          addNotification(
+            "✨ New month started! The list now shows this month only, and previous months stay saved for exports.",
+            "success",
+          );
+        } catch (err) {
+          console.error("Monthly reset error:", err);
+          addNotification("Monthly reset failed. Try refreshing.", "error");
+        } finally {
+          setLoading(false);
+        }
+      };
+      rotateMonthlyData();
+    }
+  }, [isLoggedIn, currentUser, lastMonthReset]);
+
+  // Save custom categories to localStorage
+  useEffect(() => {
+    localStorage.setItem("customCategories", JSON.stringify(customCategories));
+  }, [customCategories]);
+
   // Add notification
   const addNotification = (message, type = "info") => {
     const id =
@@ -295,6 +379,7 @@ const ExpenseTracker = () => {
       setIsLoggedIn(false);
       setCurrentUser(null);
       setExpenses([]);
+      setAllExpenses([]);
       setBudgets({});
       localStorage.removeItem("currentUser");
       setAuthForm({ email: "", password: "", name: "" });
@@ -307,10 +392,18 @@ const ExpenseTracker = () => {
     setIsLoadingExpenses(true);
     try {
       const response = await expenseAPI.getAllExpenses(userId);
-      setExpenses(response.data || []);
+      const loadedExpenses = response.data || [];
+      const activeMonthKey = getMonthKey();
+      setAllExpenses(loadedExpenses);
+      setExpenses(
+        loadedExpenses.filter((expense) =>
+          isSameMonth(expense.date, activeMonthKey),
+        ),
+      );
     } catch (err) {
       console.error(err);
       setExpenses([]);
+      setAllExpenses([]);
     } finally {
       setIsLoadingExpenses(false);
     }
@@ -373,6 +466,28 @@ const ExpenseTracker = () => {
       console.error(err);
       addNotification("Try again.", "error");
     }
+  };
+
+  const createCustomCategory = (e) => {
+    e.preventDefault();
+    if (!newCategory.label.trim()) {
+      addNotification("Category name is required", "error");
+      return;
+    }
+
+    const newId = `cat_${Date.now()}`;
+    const categoryToAdd = {
+      id: newId,
+      label: newCategory.label.trim(),
+      icon: newCategory.icon,
+      color: newCategory.color,
+    };
+
+    setCustomCategories([...customCategories, categoryToAdd]);
+    setBudgetCategory(`custom_${newId}`);
+    setNewCategory({ label: "", icon: "📦", color: "#A8D8EA" });
+    setShowCreateCategoryModal(false);
+    addNotification("✨ Custom category created!", "success");
   };
 
   const setBudget = async (e) => {
@@ -487,6 +602,8 @@ const ExpenseTracker = () => {
     })
     .filter((cat) => cat.spent > 0 || cat.budget > 0);
 
+  const expenseHistory = allExpenses.length > 0 ? allExpenses : expenses;
+
   // Get date ranges
   const getDateRange = (type) => {
     const now = new Date();
@@ -585,37 +702,304 @@ const ExpenseTracker = () => {
 
     const insights = [];
     const avgSpending = totalExpenses / Math.max(filteredExpenses.length, 1);
+    const avgDailySpending =
+      totalExpenses / Math.max(filteredExpenses.length, 1);
 
-    if (avgSpending > 50) {
+    // Calculate spending trend (compare recent to older)
+    const midpoint = Math.floor(filteredExpenses.length / 2);
+    const recentExpenses = filteredExpenses.slice(0, midpoint);
+    const olderExpenses = filteredExpenses.slice(midpoint);
+    const recentAvg =
+      recentExpenses.reduce((sum, exp) => sum + exp.amount, 0) /
+      Math.max(recentExpenses.length, 1);
+    const olderAvg =
+      olderExpenses.reduce((sum, exp) => sum + exp.amount, 0) /
+      Math.max(olderExpenses.length, 1);
+    const spendingTrend = ((recentAvg - olderAvg) / olderAvg) * 100;
+
+    // 1. Budget Health Score & Overall Assessment
+    const budgetedCategories = categoryData.filter((c) => c.budget > 0);
+    const budgetHealth =
+      budgetedCategories.length > 0
+        ? (budgetedCategories.filter((c) => c.percentage < 100).length /
+            budgetedCategories.length) *
+          100
+        : 0;
+
+    if (budgetHealth >= 80) {
       insights.push(
-        "🔍 Your spending is relatively high. Consider setting budgets.",
+        "🎯 Excellent budget control! You're staying well within your limits.",
+      );
+    } else if (budgetHealth >= 50) {
+      insights.push(
+        "📈 Good budget management, but watch a few categories closely.",
+      );
+    } else if (budgetHealth > 0) {
+      insights.push(
+        "⚠️ Multiple budgets are at risk. Review your spending habits.",
       );
     }
 
+    // 2. Spending Trend Analysis
+    if (filteredExpenses.length > 2) {
+      if (spendingTrend > 15) {
+        insights.push(
+          `📊 ⚠️ Your spending increased ${Math.abs(spendingTrend).toFixed(0)}% recently. Try to control it!`,
+        );
+      } else if (spendingTrend < -15) {
+        insights.push(
+          `📊 ✅ Great! Your spending decreased ${Math.abs(spendingTrend).toFixed(0)}% recently. Keep it up!`,
+        );
+      }
+    }
+
+    // 3. Smart Budget Recommendations
+    const categoryWithoutBudget = categoryData.find(
+      (c) => c.spent > 0 && c.budget === 0 && c.spent > totalExpenses * 0.1,
+    );
+    if (categoryWithoutBudget) {
+      const recommendedBudget = (categoryWithoutBudget.spent * 1.2).toFixed(2);
+      insights.push(
+        `💡 ${categoryWithoutBudget.label} needs a budget! Recommended: ${formatCurrency(recommendedBudget)}`,
+      );
+    }
+
+    // 4. Top Spending Category Analysis
     const topCategory = categoryData.reduce(
       (a, b) => (a.spent > b.spent ? a : b),
       { spent: 0 },
     );
     if (topCategory.spent > totalExpenses * 0.4) {
+      const percentageOfTotal = (
+        (topCategory.spent / totalExpenses) *
+        100
+      ).toFixed(0);
       insights.push(
-        `📊 ${topCategory.label} is your highest spending category.`,
+        `🔝 ${topCategory.label} takes ${percentageOfTotal}% of your budget!`,
+      );
+
+      // Suggest saving opportunity
+      const savingsOpportunity = (topCategory.spent * 0.1).toFixed(2);
+      insights.push(
+        `💰 Reducing ${topCategory.label} by 10% could save ${formatCurrency(savingsOpportunity)}/month!`,
       );
     }
 
+    // 5. Budget Exceeded Alert
     const budgetExceeded = categoryData.filter(
       (c) => c.budget > 0 && c.percentage >= 100,
     );
     if (budgetExceeded.length > 0) {
-      insights.push(`⚠️ ${budgetExceeded.length} budget(s) exceeded.`);
+      const overBudgetAmount = budgetExceeded.reduce(
+        (sum, c) => sum + (c.spent - c.budget),
+        0,
+      );
+      insights.push(
+        `🚨 ${budgetExceeded.length} budget(s) exceeded by ${formatCurrency(overBudgetAmount)} total!`,
+      );
     }
 
-    return insights;
+    // 6. Average Daily Spending Insight
+    if (filteredExpenses.length >= 3) {
+      const projectedMonthly = (avgDailySpending * 30).toFixed(2);
+      insights.push(
+        `📅 Average daily spending: ${formatCurrency(avgDailySpending.toFixed(2))} (≈ ${formatCurrency(projectedMonthly)}/month)`,
+      );
+    }
+
+    // 7. Low Spending Categories (Opportunity to Reallocate)
+    const lowSpendingCat = categoryData.find(
+      (c) => c.budget > 0 && c.percentage < 20 && c.spent > 0,
+    );
+    if (lowSpendingCat) {
+      const budgetDifference = (
+        lowSpendingCat.budget - lowSpendingCat.spent
+      ).toFixed(2);
+      insights.push(
+        `✨ ${lowSpendingCat.label} budget has ${formatCurrency(budgetDifference)} remaining. Well controlled!`,
+      );
+    }
+
+    // 8. High Frequency Low Value Expenses
+    const smallExpenses = filteredExpenses.filter(
+      (e) => e.amount < avgDailySpending / 2,
+    );
+    if (smallExpenses.length > filteredExpenses.length * 0.5) {
+      const smallExpenseTotal = smallExpenses.reduce(
+        (sum, e) => sum + e.amount,
+        0,
+      );
+      insights.push(
+        `🎯 ${smallExpenses.length} small expenses total ${formatCurrency(smallExpenseTotal.toFixed(2))}. Every bit counts!`,
+      );
+    }
+
+    // 9. Weekend vs Weekday Spending (if enough data)
+    if (filteredExpenses.length >= 7) {
+      const weekendExpenses = filteredExpenses
+        .filter((e) => {
+          const day = new Date(e.date).getDay();
+          return day === 0 || day === 6;
+        })
+        .reduce((sum, e) => sum + e.amount, 0);
+      const weekdayExpenses = filteredExpenses
+        .filter((e) => {
+          const day = new Date(e.date).getDay();
+          return day !== 0 && day !== 6;
+        })
+        .reduce((sum, e) => sum + e.amount, 0);
+
+      if (weekendExpenses > weekdayExpenses * 1.5) {
+        insights.push(
+          `🎉 You spend significantly more on weekends. Plan better for leisure!`,
+        );
+      }
+    }
+
+    return insights.slice(0, 5); // Return top 5 insights
+  };
+
+  // Calculate Financial Health Score (0-100)
+  const getFinancialHealthScore = () => {
+    if (expenses.length === 0) return 0;
+
+    let score = 50; // Base score
+
+    // Budget adherence (max +30 points)
+    const budgetedCategories = categoryData.filter((c) => c.budget > 0);
+    if (budgetedCategories.length > 0) {
+      const withoutExceeding = budgetedCategories.filter(
+        (c) => c.percentage < 100,
+      );
+      const adherence = withoutExceeding.length / budgetedCategories.length;
+      score += adherence * 30;
+    }
+
+    // Spending consistency (max +15 points)
+    const avgAmount = totalExpenses / filteredExpenses.length;
+    const variance =
+      filteredExpenses.reduce(
+        (sum, exp) => sum + Math.abs(exp.amount - avgAmount),
+        0,
+      ) / filteredExpenses.length;
+    const consistency = Math.max(0, 1 - (variance / avgAmount) * 0.5);
+    score += consistency * 15;
+
+    // Budget coverage (max +5 points)
+    const categoriesWithBudget = categoryData.filter(
+      (c) => c.budget > 0,
+    ).length;
+    const budgetCoverage = Math.min(
+      (categoriesWithBudget / categories.length) * 0.5,
+      1,
+    );
+    score += budgetCoverage * 5;
+
+    return Math.min(100, Math.round(score));
+  };
+
+  // Get Smart Budget Recommendations
+  const getBudgetRecommendations = () => {
+    const recommendations = [];
+
+    categoryData.forEach((cat) => {
+      if (cat.spent > 0 && cat.budget === 0) {
+        // Recommend budget for category without one
+        const recommended = (cat.spent * 1.2).toFixed(2);
+        recommendations.push({
+          category: cat.label,
+          current: cat.spent.toFixed(2),
+          recommended,
+          reason: "Based on your spending pattern",
+        });
+      } else if (cat.budget > 0 && cat.percentage > 90) {
+        // Recommend increase if consistently high
+        const recommended = (cat.budget * 1.15).toFixed(2);
+        recommendations.push({
+          category: cat.label,
+          current: cat.budget.toFixed(2),
+          recommended,
+          reason: "You're consistently near the limit",
+        });
+      }
+    });
+
+    return recommendations.slice(0, 3); // Top 3 recommendations
+  };
+
+  // Detect Spending Anomalies
+  const getSpendingAnomalies = () => {
+    if (filteredExpenses.length < 3) return [];
+
+    const avgAmount = totalExpenses / filteredExpenses.length;
+    const stdDeviation = Math.sqrt(
+      filteredExpenses.reduce(
+        (sum, exp) => sum + Math.pow(exp.amount - avgAmount, 2),
+        0,
+      ) / filteredExpenses.length,
+    );
+
+    const anomalies = filteredExpenses.filter(
+      (exp) => Math.abs(exp.amount - avgAmount) > stdDeviation * 2,
+    );
+
+    return anomalies.slice(0, 3); // Return top 3 anomalies
+  };
+
+  // Get Savings Opportunities
+  const getSavingsOpportunities = () => {
+    const opportunities = [];
+    const avgDailySpending =
+      totalExpenses / Math.max(filteredExpenses.length, 1);
+
+    // Opportunity 1: Reduce top category
+    const topCategory = categoryData.reduce(
+      (a, b) => (a.spent > b.spent ? a : b),
+      { spent: 0 },
+    );
+    if (topCategory.spent > 0) {
+      const savings = (topCategory.spent * 0.1).toFixed(2);
+      opportunities.push({
+        title: `Reduce ${topCategory.label} by 10%`,
+        savings: savings,
+        description: `You could save ${formatCurrency(savings)} this month`,
+      });
+    }
+
+    // Opportunity 2: Eliminate small daily expenses
+    const smallExpenses = filteredExpenses.filter(
+      (e) => e.amount < avgDailySpending / 3,
+    );
+    if (smallExpenses.length > 5) {
+      const totalSmall = smallExpenses.reduce((sum, e) => sum + e.amount, 0);
+      const savings = (totalSmall * 0.3).toFixed(2);
+      opportunities.push({
+        title: "Cut small daily expenses by 30%",
+        savings: savings,
+        description: `${smallExpenses.length} small purchases add up to ${formatCurrency(totalSmall.toFixed(2))}`,
+      });
+    }
+
+    // Opportunity 3: Budget optimization
+    const unbuggetedHigh = categoryData.find(
+      (c) => c.spent > 0 && c.budget === 0 && c.spent > totalExpenses * 0.15,
+    );
+    if (unbuggetedHigh) {
+      const savings = (unbuggetedHigh.spent * 0.15).toFixed(2);
+      opportunities.push({
+        title: `Set and control ${unbuggetedHigh.label} budget`,
+        savings: savings,
+        description: "Reducing this category by 15% could save you money",
+      });
+    }
+
+    return opportunities;
   };
 
   // Export to CSV
   const exportToCSV = () => {
     const headers = ["Date", "Description", "Category", "Amount"];
-    const rows = expenses.map((exp) => [
+    const rows = expenseHistory.map((exp) => [
       exp.date,
       exp.description,
       categories.find((c) => c.id === exp.category)?.label || exp.category,
@@ -634,25 +1018,25 @@ const ExpenseTracker = () => {
 
   // Export with timeline/date range
   const exportWithTimeline = (timelineType) => {
-    let filteredForExport = [...expenses];
+    let filteredForExport = [...expenseHistory];
     const now = new Date();
 
     switch (timelineType) {
       case "today":
-        filteredForExport = expenses.filter(
+        filteredForExport = expenseHistory.filter(
           (exp) => new Date(exp.date).toDateString() === now.toDateString(),
         );
         break;
       case "week":
         const weekStart = new Date(now);
         weekStart.setDate(now.getDate() - now.getDay());
-        filteredForExport = expenses.filter(
+        filteredForExport = expenseHistory.filter(
           (exp) => new Date(exp.date) >= weekStart,
         );
         break;
       case "month":
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        filteredForExport = expenses.filter(
+        filteredForExport = expenseHistory.filter(
           (exp) => new Date(exp.date) >= monthStart,
         );
         break;
@@ -662,13 +1046,13 @@ const ExpenseTracker = () => {
           Math.floor(now.getMonth() / 3) * 3,
           1,
         );
-        filteredForExport = expenses.filter(
+        filteredForExport = expenseHistory.filter(
           (exp) => new Date(exp.date) >= quarterStart,
         );
         break;
       case "year":
         const yearStart = new Date(now.getFullYear(), 0, 1);
-        filteredForExport = expenses.filter(
+        filteredForExport = expenseHistory.filter(
           (exp) => new Date(exp.date) >= yearStart,
         );
         break;
@@ -729,6 +1113,135 @@ const ExpenseTracker = () => {
       `${timelineType.toUpperCase()} expenses exported! 📊`,
       "success",
     );
+  };
+
+  // Export last month's expenses
+  const exportLastMonth = () => {
+    const now = new Date();
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    let filteredForExport = expenseHistory.filter((exp) => {
+      const expDate = new Date(exp.date);
+      return expDate >= lastMonthStart && expDate <= lastMonthEnd;
+    });
+
+    if (filteredForExport.length === 0) {
+      addNotification("No expenses found for last month", "warning");
+      return;
+    }
+
+    const headers = ["Date", "Description", "Category", "Amount"];
+    const rows = filteredForExport
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .map((exp) => [
+        exp.date,
+        exp.description,
+        categories.find((c) => c.id === exp.category)?.label || exp.category,
+        exp.amount.toFixed(2),
+      ]);
+
+    const totalAmount = filteredForExport.reduce(
+      (sum, exp) => sum + exp.amount,
+      0,
+    );
+    const monthName = lastMonthStart.toLocaleDateString("en-US", {
+      month: "long",
+      year: "numeric",
+    });
+    const summaryRows = [
+      [],
+      ["SUMMARY"],
+      ["Total Expenses", "", "", totalAmount.toFixed(2)],
+      ["Transaction Count", "", "", filteredForExport.length],
+      [
+        "Average per Transaction",
+        "",
+        "",
+        (totalAmount / filteredForExport.length).toFixed(2),
+      ],
+      ["Report Period", monthName, "", new Date().toLocaleDateString()],
+    ];
+
+    const csv = [headers, ...rows, ...summaryRows]
+      .map((row) => row.map((cell) => `"${cell}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expenses_last_month_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    addNotification("Last month expenses exported! 📊", "success");
+  };
+
+  // Export custom date range
+  const exportCustomDateRange = () => {
+    const startDate = new Date(customDateRange.startDate);
+    const endDate = new Date(customDateRange.endDate);
+
+    if (startDate > endDate) {
+      addNotification("Start date must be before end date", "error");
+      return;
+    }
+
+    let filteredForExport = expenseHistory.filter((exp) => {
+      const expDate = new Date(exp.date);
+      return expDate >= startDate && expDate <= endDate;
+    });
+
+    if (filteredForExport.length === 0) {
+      addNotification("No expenses found for this date range", "warning");
+      return;
+    }
+
+    const headers = ["Date", "Description", "Category", "Amount"];
+    const rows = filteredForExport
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .map((exp) => [
+        exp.date,
+        exp.description,
+        categories.find((c) => c.id === exp.category)?.label || exp.category,
+        exp.amount.toFixed(2),
+      ]);
+
+    const totalAmount = filteredForExport.reduce(
+      (sum, exp) => sum + exp.amount,
+      0,
+    );
+    const summaryRows = [
+      [],
+      ["SUMMARY"],
+      ["Total Expenses", "", "", totalAmount.toFixed(2)],
+      ["Transaction Count", "", "", filteredForExport.length],
+      [
+        "Average per Transaction",
+        "",
+        "",
+        (totalAmount / filteredForExport.length).toFixed(2),
+      ],
+      [
+        "Report Period",
+        `${customDateRange.startDate} to ${customDateRange.endDate}`,
+        "",
+        new Date().toLocaleDateString(),
+      ],
+    ];
+
+    const csv = [headers, ...rows, ...summaryRows]
+      .map((row) => row.map((cell) => `"${cell}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expenses_custom_${customDateRange.startDate}_to_${customDateRange.endDate}.csv`;
+    a.click();
+    addNotification("Custom range expenses exported! 📊", "success");
+    setShowCustomDateModal(false);
+    setShowExportMenu(false);
   };
 
   // Auth UI
@@ -984,13 +1497,19 @@ const ExpenseTracker = () => {
             <Target size={18} />
             Set Budget
           </button>
+          <button
+            onClick={() => setShowAiSuggestionsModal(true)}
+            className="action-button"
+          >
+            <Zap size={18} />
+            AI Suggestions
+          </button>
           <div
             ref={exportMenuRef}
             style={{ position: "relative", display: "inline-block" }}
           >
             <button
               onClick={() => setShowExportMenu(!showExportMenu)}
-              disabled={expenses.length === 0}
               className="action-button export-button"
             >
               <Download size={18} />
@@ -1197,20 +1716,397 @@ const ExpenseTracker = () => {
                 >
                   📅 This Year
                 </button>
+                <button
+                  onClick={() => {
+                    exportLastMonth();
+                    setShowExportMenu(false);
+                  }}
+                  style={{
+                    padding: "0.75rem 1rem",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    color: darkMode ? "#e2e8f0" : "#475569",
+                    fontSize: "0.9rem",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = darkMode
+                      ? "rgba(102, 126, 234, 0.15)"
+                      : "rgba(102, 126, 234, 0.1)";
+                    e.currentTarget.style.color = "#667eea";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = darkMode
+                      ? "#e2e8f0"
+                      : "#475569";
+                  }}
+                >
+                  📆 Last Month
+                </button>
+                <button
+                  onClick={() => {
+                    setShowCustomDateModal(true);
+                    setShowExportMenu(false);
+                  }}
+                  style={{
+                    padding: "0.75rem 1rem",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    color: darkMode ? "#e2e8f0" : "#475569",
+                    fontSize: "0.9rem",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = darkMode
+                      ? "rgba(102, 126, 234, 0.15)"
+                      : "rgba(102, 126, 234, 0.1)";
+                    e.currentTarget.style.color = "#667eea";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = darkMode
+                      ? "#e2e8f0"
+                      : "#475569";
+                  }}
+                >
+                  📋 Custom Range
+                </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* Insights */}
         {getInsights().length > 0 && (
-          <div className="insights-container">
-            <Zap size={18} style={{ marginRight: "0.75rem", flexShrink: 0 }} />
-            <div>
-              {getInsights().map((insight, idx) => (
-                <div key={idx}>{insight}</div>
-              ))}
+          <div
+            className="insights-container"
+            style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
+          >
+            {/* Financial Health Score */}
+            <div
+              style={{
+                padding: "0.75rem",
+                background: darkMode
+                  ? "linear-gradient(135deg, rgba(102, 126, 234, 0.15), rgba(118, 75, 162, 0.15))"
+                  : "linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.08))",
+                borderRadius: "10px",
+                border: `1px solid ${darkMode ? "rgba(102, 126, 234, 0.35)" : "rgba(102, 126, 234, 0.25)"}`,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "0.85rem",
+                    fontWeight: "700",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    color: darkMode ? "#e2e8f0" : "#1e293b",
+                  }}
+                >
+                  💪 Health Score
+                </span>
+                <span
+                  style={{
+                    fontSize: "1.25rem",
+                    fontWeight: "800",
+                    color:
+                      getFinancialHealthScore() >= 80
+                        ? "#10b981"
+                        : getFinancialHealthScore() >= 60
+                          ? "#f59e0b"
+                          : "#ef4444",
+                  }}
+                >
+                  {getFinancialHealthScore()}/100
+                </span>
+              </div>
+              <div
+                style={{
+                  height: "6px",
+                  background: darkMode
+                    ? "rgba(255,255,255, 0.15)"
+                    : "rgba(0,0,0,0.08)",
+                  borderRadius: "3px",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${getFinancialHealthScore()}%`,
+                    background:
+                      getFinancialHealthScore() >= 80
+                        ? "#10b981"
+                        : getFinancialHealthScore() >= 60
+                          ? "#f59e0b"
+                          : "#ef4444",
+                    transition: "width 0.5s ease",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  marginTop: "0.35rem",
+                  color: darkMode ? "#cbd5e1" : "#64748b",
+                }}
+              >
+                {getFinancialHealthScore() >= 80
+                  ? "✅ Excellent"
+                  : getFinancialHealthScore() >= 60
+                    ? "👍 Good"
+                    : "📈 Fair"}
+              </div>
             </div>
+
+            {/* Smart Insights */}
+            <div
+              style={{
+                padding: "0.75rem",
+                background: darkMode
+                  ? "rgba(30, 41, 59, 0.6)"
+                  : "rgba(248, 250, 252, 0.8)",
+                borderRadius: "10px",
+                border: `1px solid ${darkMode ? "rgba(102, 126, 234, 0.25)" : "rgba(102, 126, 234, 0.2)"}`,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: "700",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  marginBottom: "0.5rem",
+                  color: darkMode ? "#e2e8f0" : "#1e293b",
+                }}
+              >
+                <Zap size={16} />
+                Smart Insights
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.4rem",
+                }}
+              >
+                {getInsights().map((insight, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      background: darkMode
+                        ? "rgba(102, 126, 234, 0.12)"
+                        : "rgba(102, 126, 234, 0.08)",
+                      borderLeft: `3px solid ${darkMode ? "#667eea" : "#4f46e5"}`,
+                      borderRadius: "5px",
+                      fontSize: "0.8rem",
+                      color: darkMode ? "#e2e8f0" : "#1e293b",
+                      lineHeight: "1.4",
+                    }}
+                  >
+                    {insight}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Budget Recommendations */}
+            {getBudgetRecommendations().length > 0 && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  background: darkMode
+                    ? "rgba(30, 41, 59, 0.6)"
+                    : "rgba(248, 250, 252, 0.8)",
+                  borderRadius: "10px",
+                  border: `1px solid ${darkMode ? "rgba(217, 119, 6, 0.25)" : "rgba(217, 119, 6, 0.2)"}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "0.85rem",
+                    fontWeight: "700",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    marginBottom: "0.5rem",
+                    color: darkMode ? "#fbbf24" : "#b45309",
+                  }}
+                >
+                  🎯 Budget Tips
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.4rem",
+                  }}
+                >
+                  {getBudgetRecommendations().map((rec, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "0.5rem 0.75rem",
+                        background: darkMode
+                          ? "rgba(217, 119, 6, 0.12)"
+                          : "rgba(217, 119, 6, 0.08)",
+                        borderLeft: `3px solid ${darkMode ? "#f59e0b" : "#d97706"}`,
+                        borderRadius: "5px",
+                        fontSize: "0.75rem",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            fontWeight: "700",
+                            color: darkMode ? "#fbbf24" : "#b45309",
+                          }}
+                        >
+                          {rec.category}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.7rem",
+                            color: darkMode ? "#cbd5e1" : "#64748b",
+                            marginTop: "0.2rem",
+                          }}
+                        >
+                          {rec.reason}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <div
+                          style={{
+                            fontSize: "0.7rem",
+                            color: darkMode ? "#cbd5e1" : "#64748b",
+                          }}
+                        >
+                          Suggest
+                        </div>
+                        <div
+                          style={{
+                            fontWeight: "700",
+                            color: darkMode ? "#fbbf24" : "#b45309",
+                          }}
+                        >
+                          {formatCurrency(rec.recommended)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Savings Opportunities */}
+            {getSavingsOpportunities().length > 0 && (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  background: darkMode
+                    ? "rgba(30, 41, 59, 0.6)"
+                    : "rgba(248, 250, 252, 0.8)",
+                  borderRadius: "10px",
+                  border: `1px solid ${darkMode ? "rgba(34, 197, 94, 0.25)" : "rgba(34, 197, 94, 0.2)"}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "0.85rem",
+                    fontWeight: "700",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    marginBottom: "0.5rem",
+                    color: darkMode ? "#86efac" : "#16a34a",
+                  }}
+                >
+                  💰 Savings
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.4rem",
+                  }}
+                >
+                  {getSavingsOpportunities().map((opp, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "0.5rem 0.75rem",
+                        background: darkMode
+                          ? "rgba(34, 197, 94, 0.12)"
+                          : "rgba(34, 197, 94, 0.08)",
+                        borderLeft: `3px solid ${darkMode ? "#22c55e" : "#16a34a"}`,
+                        borderRadius: "5px",
+                        fontSize: "0.75rem",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div
+                          style={{
+                            fontWeight: "700",
+                            color: darkMode ? "#86efac" : "#16a34a",
+                          }}
+                        >
+                          {opp.title}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.7rem",
+                            color: darkMode ? "#cbd5e1" : "#64748b",
+                            marginTop: "0.2rem",
+                          }}
+                        >
+                          {opp.description}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <div
+                          style={{
+                            fontSize: "0.7rem",
+                            color: darkMode ? "#cbd5e1" : "#64748b",
+                          }}
+                        >
+                          Save
+                        </div>
+                        <div
+                          style={{
+                            fontWeight: "700",
+                            color: darkMode ? "#86efac" : "#16a34a",
+                          }}
+                        >
+                          +{formatCurrency(opp.savings)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1837,6 +2733,17 @@ const ExpenseTracker = () => {
         </div>
       </div>
 
+      <AISuggestionsModal
+        open={showAiSuggestionsModal}
+        onClose={() => setShowAiSuggestionsModal(false)}
+        darkMode={darkMode}
+        insights={getInsights()}
+        financialHealthScore={getFinancialHealthScore()}
+        budgetRecommendations={getBudgetRecommendations()}
+        savingsOpportunities={getSavingsOpportunities()}
+        formatCurrency={formatCurrency}
+      />
+
       {/* Budget Modal */}
       {showBudgetModal && (
         <div
@@ -1858,22 +2765,46 @@ const ExpenseTracker = () => {
             <form onSubmit={setBudget}>
               <div className="form-group">
                 <label className="form-label">Category</label>
-                <select
-                  value={budgetCategory}
-                  onChange={(e) => setBudgetCategory(e.target.value)}
-                  disabled={isEditingBudget}
-                  className="form-input select-input"
-                  style={{
-                    opacity: isEditingBudget ? 0.6 : 1,
-                    cursor: isEditingBudget ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.icon} {cat.label}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <select
+                    value={budgetCategory}
+                    onChange={(e) => setBudgetCategory(e.target.value)}
+                    disabled={isEditingBudget}
+                    className="form-input select-input"
+                    style={{
+                      opacity: isEditingBudget ? 0.6 : 1,
+                      cursor: isEditingBudget ? "not-allowed" : "pointer",
+                      flex: 1,
+                    }}
+                  >
+                    {categories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.icon} {cat.label}
+                      </option>
+                    ))}
+                  </select>
+                  {!isEditingBudget && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateCategoryModal(true)}
+                      style={{
+                        padding: "0.625rem 1rem",
+                        background:
+                          "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "8px",
+                        fontSize: "0.9rem",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                      title="Create new category"
+                    >
+                      ➕ New
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="form-group">
@@ -1938,6 +2869,355 @@ const ExpenseTracker = () => {
                     : isEditingBudget
                       ? "Update Budget"
                       : "Set Budget"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Date Range Modal */}
+      {showCustomDateModal && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowCustomDateModal(false);
+            }
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{ background: darkMode ? "#2a2a3e" : "white" }}
+          >
+            <h2 className="card-title">Export Custom Date Range</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                exportCustomDateRange();
+              }}
+            >
+              <div className="form-group">
+                <label className="form-label">Start Date</label>
+                <input
+                  type="date"
+                  value={customDateRange.startDate}
+                  onChange={(e) =>
+                    setCustomDateRange({
+                      ...customDateRange,
+                      startDate: e.target.value,
+                    })
+                  }
+                  className="form-input"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">End Date</label>
+                <input
+                  type="date"
+                  value={customDateRange.endDate}
+                  onChange={(e) =>
+                    setCustomDateRange({
+                      ...customDateRange,
+                      endDate: e.target.value,
+                    })
+                  }
+                  className="form-input"
+                  required
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: "0.75rem" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomDateModal(false)}
+                  style={{
+                    flex: 1,
+                    padding: "0.875rem",
+                    background: darkMode ? "#1a1a2e" : "white",
+                    color: "#64748b",
+                    border: "2px solid #e2e8f0",
+                    borderRadius: "8px",
+                    fontSize: "1rem",
+                    fontWeight: "600",
+                    fontFamily: '"Work Sans", sans-serif',
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    flex: 1,
+                    padding: "0.875rem",
+                    background:
+                      "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "1rem",
+                    fontWeight: "600",
+                    fontFamily: '"Work Sans", sans-serif',
+                    cursor: loading ? "not-allowed" : "pointer",
+                    opacity: loading ? 0.7 : 1,
+                  }}
+                >
+                  {loading ? "Exporting..." : "Export"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create Custom Category Modal */}
+      {showCreateCategoryModal && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowCreateCategoryModal(false);
+            }
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{ background: darkMode ? "#2a2a3e" : "white" }}
+          >
+            <h2 className="card-title">Create Custom Category</h2>
+            <form onSubmit={createCustomCategory}>
+              <div className="form-group">
+                <label className="form-label">Category Name</label>
+                <input
+                  type="text"
+                  value={newCategory.label}
+                  onChange={(e) =>
+                    setNewCategory({ ...newCategory, label: e.target.value })
+                  }
+                  placeholder="e.g., Groceries, Gym, Subscriptions"
+                  className="form-input"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Select Icon or Emoji</label>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(6, 1fr)",
+                    gap: "0.5rem",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  {[
+                    "🍕",
+                    "🍔",
+                    "🍜",
+                    "🎮",
+                    "📱",
+                    "💻",
+                    "💪",
+                    "🏃",
+                    "🚀",
+                    "✈️",
+                    "🚗",
+                    "🎓",
+                    "📚",
+                    "🎬",
+                    "🎵",
+                    "🎨",
+                    "🏠",
+                    "🏥",
+                    "⚕️",
+                    "💄",
+                    "👔",
+                    "👟",
+                    "🐕",
+                    "🌸",
+                    "🌟",
+                    "🎁",
+                    "💎",
+                    "📸",
+                    "🎪",
+                    "🎭",
+                    "🏋️",
+                    "🧘",
+                    "🍿",
+                    "🍺",
+                    "☕",
+                    "🛍️",
+                    "💳",
+                    "💰",
+                    "💸",
+                    "⚡",
+                    "🌈",
+                  ].map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() =>
+                        setNewCategory({ ...newCategory, icon: emoji })
+                      }
+                      style={{
+                        padding: "0.5rem",
+                        fontSize: "1.5rem",
+                        background:
+                          newCategory.icon === emoji
+                            ? "rgba(102, 126, 234, 0.3)"
+                            : darkMode
+                              ? "rgba(102, 126, 234, 0.1)"
+                              : "rgba(102, 126, 234, 0.05)",
+                        border:
+                          newCategory.icon === emoji
+                            ? "2px solid #667eea"
+                            : "1px solid transparent",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                        transition: "all 0.2s",
+                      }}
+                      title={emoji}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+                {newCategory.icon && (
+                  <div
+                    style={{
+                      fontSize: "0.85rem",
+                      color: darkMode ? "#cbd5e1" : "#64748b",
+                      textAlign: "center",
+                    }}
+                  >
+                    Selected: {newCategory.icon}
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Color</label>
+                <div
+                  style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}
+                >
+                  {[
+                    "#FF6B6B",
+                    "#4ECDC4",
+                    "#95E1D3",
+                    "#F38181",
+                    "#AA96DA",
+                    "#FCBAD3",
+                    "#A8D8EA",
+                    "#FFD93D",
+                    "#6BCB77",
+                    "#FF6B9D",
+                  ].map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setNewCategory({ ...newCategory, color })}
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "6px",
+                        background: color,
+                        border:
+                          newCategory.color === color
+                            ? "3px solid white"
+                            : "2px solid transparent",
+                        cursor: "pointer",
+                        transition: "all 0.2s",
+                        boxShadow:
+                          newCategory.color === color
+                            ? `0 0 0 2px ${color}`
+                            : "none",
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: "1.5rem",
+                  padding: "1rem",
+                  background: darkMode
+                    ? "rgba(102, 126, 234, 0.1)"
+                    : "rgba(102, 126, 234, 0.05)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "2rem",
+                    lineHeight: "1",
+                  }}
+                >
+                  {newCategory.icon}
+                </div>
+                <div style={{ color: darkMode ? "#e2e8f0" : "#475569" }}>
+                  <div
+                    style={{
+                      fontSize: "0.9rem",
+                      color: darkMode ? "#cbd5e1" : "#64748b",
+                    }}
+                  >
+                    Preview:
+                  </div>
+                  <div style={{ fontWeight: "600" }}>
+                    {newCategory.label || "Category Name"}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{ display: "flex", gap: "0.75rem", marginTop: "1.5rem" }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateCategoryModal(false);
+                    setNewCategory({ label: "", icon: "📦", color: "#A8D8EA" });
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: "0.875rem",
+                    background: darkMode ? "#1a1a2e" : "white",
+                    color: "#64748b",
+                    border: "2px solid #e2e8f0",
+                    borderRadius: "8px",
+                    fontSize: "1rem",
+                    fontWeight: "600",
+                    fontFamily: '"Work Sans", sans-serif',
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    flex: 1,
+                    padding: "0.875rem",
+                    background:
+                      "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "1rem",
+                    fontWeight: "600",
+                    fontFamily: '"Work Sans", sans-serif',
+                    cursor: "pointer",
+                  }}
+                >
+                  Create Category
                 </button>
               </div>
             </form>
