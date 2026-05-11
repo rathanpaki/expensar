@@ -22,7 +22,7 @@ export const AISuggestionsModal = ({
 
   return (
     <div
-      className="modal-overlay"
+      className="modal-overlay ai-suggestions-modal-overlay"
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -30,32 +30,28 @@ export const AISuggestionsModal = ({
       }}
     >
       <div
-        className="modal-content"
+        className="modal-content ai-suggestions-modal-content"
         style={{
-          width: "min(900px, 96vw)",
-          maxHeight: "92vh",
-          overflowY: "auto",
           background: darkMode ? "#1f2937" : "#ffffff",
           color: darkMode ? "#e2e8f0" : "#1e293b",
           border: `1px solid ${darkMode ? "rgba(102, 126, 234, 0.35)" : "rgba(102, 126, 234, 0.2)"}`,
-          padding: "2rem",
-          borderRadius: "12px",
         }}
       >
         {/* Header */}
         <div
+          className="ai-suggestions-modal-header"
           style={{
             display: "flex",
             alignItems: "flex-start",
             justifyContent: "space-between",
-            gap: "1.5rem",
+            gap: "1rem",
             marginBottom: "2rem",
           }}
         >
-          <div>
+          <div className="ai-suggestions-modal-header-copy">
             <h2
               style={{
-                fontSize: "1.75rem",
+                fontSize: "clamp(1.35rem, 4vw, 1.75rem)",
                 fontWeight: 800,
                 marginBottom: "0.5rem",
                 background: darkMode
@@ -82,6 +78,7 @@ export const AISuggestionsModal = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
+            className="ai-suggestions-modal-close"
             style={{
               border: "none",
               background: darkMode
@@ -115,16 +112,18 @@ export const AISuggestionsModal = ({
 
         {/* Grid Layout */}
         <div
+          className="ai-suggestions-modal-grid"
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: "1.25rem",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+            gap: "1rem",
           }}
         >
           {/* Health Score Card */}
           <div
+            className="ai-suggestions-card"
             style={{
-              padding: "1.25rem",
+              padding: "1.1rem",
               borderRadius: "12px",
               background: darkMode
                 ? "linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12))"
@@ -196,8 +195,9 @@ export const AISuggestionsModal = ({
 
           {/* Smart Insights Card */}
           <div
+            className="ai-suggestions-card"
             style={{
-              padding: "1.25rem",
+              padding: "1.1rem",
               borderRadius: "12px",
               background: darkMode
                 ? "rgba(30, 41, 59, 0.5)"
@@ -249,8 +249,9 @@ export const AISuggestionsModal = ({
           {/* Budget Tips Card */}
           {budgetRecommendations.length > 0 && (
             <div
+              className="ai-suggestions-card"
               style={{
-                padding: "1.25rem",
+                padding: "1.1rem",
                 borderRadius: "12px",
                 background: darkMode
                   ? "rgba(30, 41, 59, 0.5)"
@@ -325,8 +326,9 @@ export const AISuggestionsModal = ({
           {/* Savings Opportunities Card */}
           {savingsOpportunities.length > 0 && (
             <div
+              className="ai-suggestions-card"
               style={{
-                padding: "1.25rem",
+                padding: "1.1rem",
                 borderRadius: "12px",
                 background: darkMode
                   ? "rgba(30, 41, 59, 0.5)"
